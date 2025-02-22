@@ -1,0 +1,325 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Побережье Откровений</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+	
+    <!-- Leaflet.Measure (Рабочая версия с GitHub) -->
+    <link rel="stylesheet" href="https://rawcdn.githack.com/ljagis/leaflet-measure/gh-pages/leaflet-measure.css" />
+    <script src="https://rawcdn.githack.com/ljagis/leaflet-measure/gh-pages/leaflet-measure.js"></script>
+	
+    <!-- Leaflet-Geoman -->
+    <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.css" />
+    <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
+    
+    <style>
+        #map { 
+            width: 100vw;
+            height: calc(100vw * (3640 / 3067));
+            max-height: 100vh;
+            background-color: LightSteelBlue;
+        }
+		.city-label.leaflet-tooltip {
+            background: none !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+        }
+        .city-label {
+            font-size: 16px;
+            font-weight: medium;
+            color: Snow;
+            text-shadow: 2px 2px 4px DarkSlateGray;
+            padding: 0;
+        }
+        .big-label {
+            font-size: 14px;
+        }
+        .small-label {
+            font-size: 12px;
+        }
+		.large-label {
+            font-size: 16px;
+			font-weight: bold;
+        }
+		.geo-label.leaflet-tooltip {
+   		    background: none !important;
+			text-align: center; /* Центрирование текста */
+			white-space: nowrap; /* Запрет переноса браузером */
+   		    border: none !important;
+   		    box-shadow: none !important;
+   		    font-weight: bold;
+   		    color: rgba(0, 0, 0, 0.8);
+   		    text-shadow: 1px 1px 2px LightGray
+		}
+		.geo-label-large {
+            font-size: 17px;
+		}
+		.geo-label-medium {
+            font-size: 15px;
+		}
+		.geo-label-small {
+            font-size: 11px;
+        }
+		
+        #measureToggle {
+		    position: absolute;
+			top: 19px;  /* Расстояние от верхнего края */
+			left: 58px; /* Расстояние от левого края */
+			z-index: 9999; /* Убедитесь, что кнопка будет поверх карты */
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: white;
+            border: 1px solid #ccc;
+            cursor: pointer;
+			transition: background-color 0.3s ease;
+        }
+
+        #measureToggle.active {
+			background-color: GreenYellow; /* Когда инструмент включён */
+			border-color: LimeGreen;
+		}
+		
+		#unitToggle {
+			position: absolute;
+			top: 19px;
+			left: 98px;
+			z-index: 9999;
+			width: 40px;
+			height: 30px;
+			background-color: white;
+			border: 1px solid #ccc;
+			cursor: pointer;
+			transition: background-color 0.3s ease;
+			font-size: 14px;
+			text-align: center;
+		}
+
+		#unitToggle.active {
+			background-color: LightBlue;
+			border-color: DodgerBlue;
+		}
+    </style>
+</head>
+<body>
+	<button id="measureToggle" class="leaflet-bar leaflet-control">
+		<svg width="20" height="35" viewBox="0 0 24 24" fill="none" stroke="currentColor" 
+			stroke-width="2" stroke-linecap="round" stroke-linejoin="round" 
+			xmlns="http://www.w3.org/2000/svg">
+			<path d="M3 21L21 3M16 3L21 8M3 16L8 21"/>
+		</svg>
+	</button>
+	<button id="unitToggle" class="leaflet-bar leaflet-control" style="display: none;">км</button>
+    <div id="map"></div>
+    <script>
+        var map = L.map('map', {
+            minZoom: -2,
+            maxZoom: 2,
+            crs: L.CRS.Simple
+        });
+		
+        var bounds = [[0, 0], [3067, 3640]];
+        L.imageOverlay('otcrovenie.jpg', bounds).addTo(map);
+        
+        map.fitBounds(bounds);
+        map.setView([1533, 1820], 0); // Стартовая точка вида карты
+				
+		// Переключатели режимов измерения
+        let measurementMode = false;
+		let useDays = false; // Флаг переключения единиц измерения
+		
+		const measureToggleButton = document.getElementById('measureToggle');
+		const unitToggleButton = document.getElementById('unitToggle');
+		
+        measureToggleButton.addEventListener('click', function() {
+			measurementMode = !measurementMode;
+			measureToggleButton.classList.toggle('active', measurementMode); // Переключаем класс
+			unitToggleButton.style.display = measurementMode ? 'block' : 'none'; // Показываем или скрываем кнопку переключения единиц
+			
+			if (!measurementMode) {
+				map.dragging.enable();
+				map.off('mousemove', onMouseMove);
+			} else {
+				map.dragging.disable();
+			}
+		});		
+		
+		unitToggleButton.addEventListener('click', function () {
+			useDays = !useDays;
+			unitToggleButton.classList.toggle('active', useDays);
+			unitToggleButton.textContent = useDays ? 'дни' : 'км';
+		});
+		
+		// Переменные для измерения
+        let tempLine = null;
+        let tempPopup = null;
+        let startLatLng = null;
+
+        map.on('mousedown', function(e) {
+          if (!measurementMode) return;  // Если режим не активен – не выполнять код
+		  
+          startLatLng = e.latlng;
+          tempLine = L.polyline([startLatLng, startLatLng], { color: 'red' }).addTo(map);
+		  
+          tempPopup = L.popup()
+            .setLatLng(startLatLng)
+            .setContent('0 км')
+            .openOn(map);
+			
+          map.on('mousemove', onMouseMove);
+        });
+
+        function onMouseMove(e) {
+            if (!measurementMode || !tempLine) return;
+		  
+            let latlngs = [startLatLng, e.latlng];
+            tempLine.setLatLngs(latlngs);
+		  
+		    // Вычисление расстояния
+			let dx = Math.abs(startLatLng.lng - e.latlng.lng);
+			let dy = Math.abs(startLatLng.lat - e.latlng.lat);
+			
+            let distance = Math.sqrt(dx * dx + dy * dy) * 111 / 20.4; // 111 км на градус
+		    let distanceDisplay = useDays ? (distance / (4.8 * 8)).toFixed(1) + ' дни' : distance.toFixed(2) + ' км';
+		  
+            tempPopup.setLatLng(e.latlng).setContent(distanceDisplay);
+        }
+
+        map.on('mouseup', function() {
+			if (!measurementMode) return;
+			if (tempLine) {
+				map.removeLayer(tempLine);
+				tempLine = null;
+			}
+			if (tempPopup) {
+				map.closePopup(tempPopup);
+				tempPopup = null;
+			}
+			map.off('mousemove', onMouseMove);
+        });		
+				
+        var cityIcons = {
+            big: L.icon({
+                iconUrl: 'city-icon.png',
+                iconSize: [15, 15],
+                iconAnchor: [8, 11],
+                popupAnchor: [0, -15]
+            }),
+            small: L.icon({
+                iconUrl: 'city-icon.png',
+                iconSize: [10, 10],
+                iconAnchor: [5, 10],
+                popupAnchor: [0, -10]
+            }),
+			large: L.icon({
+                iconUrl: 'city-icon.png',
+                iconSize: [20, 20],
+                iconAnchor: [10, 12],
+                popupAnchor: [0, -20]
+            })
+        };
+        
+        var cities = [
+            { name: "Октория", coords: [1215, 1388], zoomShow: -2, size: "large" },
+            { name: "Ривергуд", coords: [1250, 1296], zoomShow: -1, size: "small" },
+			{ name: "Эверлунд", coords: [1263,1306], zoomShow: -1, size: "small"},
+			{ name: "Сильверимун", coords: [1280,1300], zoomShow: -1, size: "big"},
+			{ name: "Дом<br>Андимора", coords: [1287,1215], zoomShow: -1, size: "small"},
+			{ name: "Яртор", coords: [1341,1510], zoomShow: -1, size: "small"},
+			{ name: "Тамализ", coords: [1345,1539], zoomShow: -2, size: "big"}
+        ];
+        
+        cities.forEach(city => {
+            var marker = L.marker(city.coords, { 
+                icon: cityIcons[city.size]
+            }).addTo(map);
+            
+            marker.bindTooltip(city.name, { 
+                permanent: true,
+                direction: "top",
+                className: `city-label ${city.size}-label`
+            });
+            
+            function updateVisibility() {
+                var zoom = map.getZoom();
+                if (zoom >= city.zoomShow) {
+                    marker.setOpacity(1);
+                    if (marker.getTooltip()) {
+                        marker.getTooltip().getElement().style.display = "block";
+                    }
+                } else {
+                    marker.setOpacity(0);
+                    if (marker.getTooltip()) {
+                        marker.getTooltip().getElement().style.display = "none";
+                    }
+                }
+            }
+            map.on("zoomend", updateVisibility);
+            updateVisibility();
+        });
+        
+		// Список географических объектов
+        var geoLabels = [
+            { name: "Высокий лес", coords: [1440, 2140], zoomHide: -1, size: "medium" },
+            { name: "Хребты Снежного<br>Блеска", coords: [2545, 1300], zoomHide: -1, size: "large"  },
+			{ name: "Северная<br>Пуща", coords: [2100, 1000], zoomHide: -1, size: "medium"  },
+			{ name: "Море Ледяных Огней", coords: [2400, 2600], zoomHide: -1, size: "large"  },
+            { name: "Море Падающих Звёзд", coords: [1700, 500], zoomHide: -1, size: "large"  },
+			{ name: "Айрикал", coords: [410, 496], zoomHide: -1, size: "large"  },
+			{ name: "Дюны Морского<br>Ветра", coords: [810, 1680], zoomHide: -1, size: "small"  },
+			{ name: "Пустыня<br>Анохор", coords: [500, 1765], zoomHide: -1, size: "small"  },
+			{ name: "Пылающие Горы", coords: [920, 2600], zoomHide: -1, size: "large"  },
+			{ name: "Тенистый<br>Гай", coords: [1430, 1100], zoomHide: -1, size: "small"  },
+			{ name: "Пурпурные<br>скалы", coords: [1790, 1090], zoomHide: -1, size: "small"  }
+        ];
+
+        var geoTooltips = [];
+
+        // Создаём подписи без маркеров
+        geoLabels.forEach(geo => {
+            var tooltip = L.tooltip({
+                permanent: true,
+                direction: "center",
+                className: `geo-label geo-label-${geo.size}`,
+                opacity: 1
+            })
+            .setLatLng(geo.coords)
+            .setContent(geo.name)
+            .addTo(map);
+
+            geoTooltips.push({ tooltip: tooltip, zoomHide: geo.zoomHide });
+        });
+
+        // Функция для управления видимостью подписей
+        function updateGeoLabels() {
+            var zoom = map.getZoom();
+            geoTooltips.forEach(item => {
+                if (zoom > item.zoomHide) {
+                    item.tooltip.getElement().style.display = "none";
+                } else {
+                    item.tooltip.getElement().style.display = "block";
+                }
+            });
+        }
+
+        // Обновляем подписи при изменении масштаба
+        map.on("zoomend", updateGeoLabels);
+        updateGeoLabels();
+		
+		// Линейка масштаба
+		L.control.scale({
+            position: 'topleft',
+            imperial: false,
+            metric: true
+        }).addTo(map);
+    </script>
+</body>
+</html> 
